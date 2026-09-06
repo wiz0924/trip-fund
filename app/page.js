@@ -226,10 +226,10 @@ function useTripStats(trip) {
     // covers any earlier shortfall before anything is banked as credit ahead.
     // Only meaningful once the trip has a configured weekly amount.
     const currentWeek = Math.max(1, tripWeek(todayISO(), trip.createdAt));
-    const weeklyAmount = trip.weeklyAmount || 0;
     const memberLedger = trip.members.map((m) => {
       const total = perMember.find((p) => p.id === m.id)?.total || 0;
-      if (!weeklyAmount) return { id: m.id, name: m.name, weeks: [], advance: 0 };
+      const weeklyAmount = m.weeklyAmount || 0;
+      if (!weeklyAmount) return { id: m.id, name: m.name, weeklyAmount: 0, weeks: [], advance: 0 };
       let remaining = total;
       const weeksArr = [];
       for (let w = 1; w <= currentWeek; w++) {
@@ -238,7 +238,7 @@ function useTripStats(trip) {
         remaining -= paid;
         weeksArr.push({ week: w, owed, paid, status: paid >= owed ? "paid" : paid > 0 ? "partial" : "unpaid" });
       }
-      return { id: m.id, name: m.name, weeks: weeksArr, advance: Math.max(0, remaining) };
+      return { id: m.id, name: m.name, weeklyAmount, weeks: weeksArr, advance: Math.max(0, remaining) };
     });
 
     const byCategory = CATEGORIES.map((cat) => ({
@@ -262,7 +262,7 @@ function useTripStats(trip) {
     const avgWeekly = totalsPerWeek.length ? totalsPerWeek.reduce((s, v) => s + v, 0) / totalsPerWeek.length : 0;
     const estWeeks = avgWeekly > 0 ? remainingTarget / avgWeekly : null;
 
-    return { totalContrib, totalExpense, available, remainingTarget, pctTarget, perMember, byCategory, weeks, weekNums, latestContribution, latestExpense, avgWeekly, estWeeks, memberLedger, currentWeek, weeklyAmount };
+    return { totalContrib, totalExpense, available, remainingTarget, pctTarget, perMember, byCategory, weeks, weekNums, latestContribution, latestExpense, avgWeekly, estWeeks, memberLedger, currentWeek };
   }, [trip]);
 }
 
@@ -974,17 +974,17 @@ function ReportsView({ trip, stats }) {
       )}
       <Card className="p-5 mb-5">
         <h3 className="font-medium mb-3">Weekly overview</h3>
-        {stats.weeklyAmount > 0 ? (
+        {stats.memberLedger.some((m) => m.weeks.length > 0) ? (
           <>
             <p className="text-xs mb-3" style={{ color: MUTED }}>
-              Week 1 starts when this trip fund was created · {peso(stats.weeklyAmount)} expected per member each week.
-              A late or extra payment covers the oldest unpaid week first; anything left over is banked as credit toward next week.
+              Week 1 starts when this trip fund was created. Each member's weekly amount is set on their profile —
+              a late or extra payment covers their oldest unpaid week first; anything left over is banked as credit toward next week.
             </p>
             {Array.from({ length: stats.currentWeek }, (_, i) => stats.currentWeek - i).map((w) => (
               <div key={w} className="mb-3 last:mb-0">
                 <p className="text-sm font-medium mb-1.5">Week {w}{w === stats.currentWeek ? " (current)" : ""}</p>
                 <div className="space-y-1">
-                  {stats.memberLedger.map((m) => {
+                  {stats.memberLedger.filter((m) => m.weeks.length > 0).map((m) => {
                     const wk = m.weeks[w - 1];
                     return (
                       <div key={m.id} className="flex justify-between text-xs">
@@ -1009,11 +1009,16 @@ function ReportsView({ trip, stats }) {
                 ))}
               </div>
             )}
+            {stats.memberLedger.some((m) => m.weeks.length === 0) && (
+              <p className="text-xs mt-3 pt-3 border-t" style={{ color: MUTED, borderColor: BORDER }}>
+                No weekly amount set for: {stats.memberLedger.filter((m) => m.weeks.length === 0).map((m) => m.name).join(", ")}. Add one from Members → Edit.
+              </p>
+            )}
           </>
         ) : (
           <>
             <p className="text-xs mb-3" style={{ color: MUTED }}>
-              Week 1 starts the week this trip fund was created. Set a weekly amount in Edit trip to track who's caught up automatically.
+              Week 1 starts the week this trip fund was created. Set a weekly amount on a member's profile (Members → Edit) to track who's caught up automatically.
             </p>
             {stats.weekNums.slice(0, 6).map((w) => (
               <div key={w} className="mb-3 last:mb-0">
@@ -1146,9 +1151,9 @@ function TripFormModal({ initial, onClose, onSave, onDelete }) {
   const [f, setF] = useState({
     name: initial?.name || "", destination: initial?.destination || "",
     startDate: initial?.startDate || todayISO(), endDate: initial?.endDate || todayISO(),
-    description: initial?.description || "", target: initial?.target ?? 0, weeklyAmount: initial?.weeklyAmount ?? 0,
+    description: initial?.description || "", target: initial?.target ?? 0,
   });
-  const submit = (e) => { e.preventDefault(); if (!f.name.trim()) return; onSave({ ...f, target: Number(f.target) || 0, weeklyAmount: Number(f.weeklyAmount) || 0 }); };
+  const submit = (e) => { e.preventDefault(); if (!f.name.trim()) return; onSave({ ...f, target: Number(f.target) || 0 }); };
   return (
     <Modal title={initial ? "Edit trip" : "Create a trip"} onClose={onClose}>
       <form onSubmit={submit}>
@@ -1159,10 +1164,7 @@ function TripFormModal({ initial, onClose, onSave, onDelete }) {
           <Field label="End date"><input type="date" className={inputCls} style={inputStyle} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></Field>
         </div>
         <Field label="Description (optional)"><textarea className={inputCls} style={inputStyle} rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Savings target (₱)"><input type="number" min="0" className={inputCls} style={inputStyle} value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} /></Field>
-          <Field label="Weekly amount (₱, optional)"><input type="number" min="0" className={inputCls} style={inputStyle} value={f.weeklyAmount} onChange={(e) => setF({ ...f, weeklyAmount: e.target.value })} /></Field>
-        </div>
+        <Field label="Savings target (₱)"><input type="number" min="0" className={inputCls} style={inputStyle} value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} /></Field>
         <button className="w-full text-white rounded-xl py-2.5 font-medium mt-2" style={{ background: COVER }}>{initial ? "Save changes" : "Create trip"}</button>
       </form>
       {initial && onDelete && (
@@ -1182,13 +1184,25 @@ function TripFormModal({ initial, onClose, onSave, onDelete }) {
 }
 
 function MemberFormModal({ initial, onClose, onSave }) {
-  const [f, setF] = useState({ name: initial?.name || "", goal: initial?.goal ?? "" });
-  const submit = (e) => { e.preventDefault(); if (!f.name.trim()) return; onSave({ name: f.name, goal: f.goal === "" ? undefined : Number(f.goal) }); };
+  const [f, setF] = useState({ name: initial?.name || "", goal: initial?.goal ?? "", weeklyAmount: initial?.weeklyAmount ?? "" });
+  const submit = (e) => {
+    e.preventDefault();
+    if (!f.name.trim()) return;
+    onSave({
+      name: f.name,
+      goal: f.goal === "" ? undefined : Number(f.goal),
+      weeklyAmount: f.weeklyAmount === "" ? undefined : Number(f.weeklyAmount),
+    });
+  };
   return (
     <Modal title={initial ? "Edit member" : "Add member"} onClose={onClose}>
       <form onSubmit={submit}>
         <Field label="Name"><input className={inputCls} style={inputStyle} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required /></Field>
         <Field label="Contribution goal (₱, optional)"><input type="number" min="0" className={inputCls} style={inputStyle} value={f.goal} onChange={(e) => setF({ ...f, goal: e.target.value })} /></Field>
+        <Field label="Weekly amount (₱, optional)">
+          <input type="number" min="0" className={inputCls} style={inputStyle} value={f.weeklyAmount} onChange={(e) => setF({ ...f, weeklyAmount: e.target.value })} />
+        </Field>
+        <p className="text-xs -mt-2.5 mb-4" style={{ color: MUTED }}>How much this member is expected to contribute each week. Late or extra payments automatically catch up past weeks first.</p>
         <button className="w-full text-white rounded-xl py-2.5 font-medium mt-2" style={{ background: FOREST }}>{initial ? "Save changes" : "Add member"}</button>
       </form>
     </Modal>
