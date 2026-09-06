@@ -604,7 +604,7 @@ function HomeView({ trips, user, isAdmin, openModal, onOpenTrip }) {
     <div>
       <div className="rounded-3xl p-6 sm:p-9 mb-8 text-white" style={{ background: `linear-gradient(135deg, ${COVER}, ${COVER_2})` }}>
         <p className="text-sm mb-1" style={{ color: "#A9C2B7" }}>{greeting}, {user.name.split(" ")[0]}</p>
-        <h1 className="font-display text-3xl sm:text-4xl font-semibold mb-5">Tigom ta, brad 🤙</h1>
+        <h1 className="font-display text-3xl sm:text-4xl font-semibold mb-5">Tigom ta, brad</h1>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
           <div>
             <p className="text-xs mb-1" style={{ color: "#9FB6AC" }}>Saved across all trips</p>

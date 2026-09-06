@@ -221,6 +221,26 @@ function useTripStats(trip) {
       return { ...m, total, count: list.length, latest, pct: m.goal ? Math.min(100, (total / m.goal) * 100) : null };
     });
 
+    // Weekly allocation ledger: a member's total is applied to week 1's quota
+    // first, then week 2's, and so on — so a late or extra payment automatically
+    // covers any earlier shortfall before anything is banked as credit ahead.
+    // Only meaningful once the trip has a configured weekly amount.
+    const currentWeek = Math.max(1, tripWeek(todayISO(), trip.createdAt));
+    const weeklyAmount = trip.weeklyAmount || 0;
+    const memberLedger = trip.members.map((m) => {
+      const total = perMember.find((p) => p.id === m.id)?.total || 0;
+      if (!weeklyAmount) return { id: m.id, name: m.name, weeks: [], advance: 0 };
+      let remaining = total;
+      const weeksArr = [];
+      for (let w = 1; w <= currentWeek; w++) {
+        const owed = weeklyAmount;
+        const paid = Math.min(remaining, owed);
+        remaining -= paid;
+        weeksArr.push({ week: w, owed, paid, status: paid >= owed ? "paid" : paid > 0 ? "partial" : "unpaid" });
+      }
+      return { id: m.id, name: m.name, weeks: weeksArr, advance: Math.max(0, remaining) };
+    });
+
     const byCategory = CATEGORIES.map((cat) => ({
       category: cat,
       spent: trip.expenses.filter((e) => e.category === cat).reduce((s, e) => s + e.amount, 0),
@@ -242,7 +262,7 @@ function useTripStats(trip) {
     const avgWeekly = totalsPerWeek.length ? totalsPerWeek.reduce((s, v) => s + v, 0) / totalsPerWeek.length : 0;
     const estWeeks = avgWeekly > 0 ? remainingTarget / avgWeekly : null;
 
-    return { totalContrib, totalExpense, available, remainingTarget, pctTarget, perMember, byCategory, weeks, weekNums, latestContribution, latestExpense, avgWeekly, estWeeks };
+    return { totalContrib, totalExpense, available, remainingTarget, pctTarget, perMember, byCategory, weeks, weekNums, latestContribution, latestExpense, avgWeekly, estWeeks, memberLedger, currentWeek, weeklyAmount };
   }, [trip]);
 }
 
@@ -604,7 +624,7 @@ function HomeView({ trips, user, isAdmin, openModal, onOpenTrip }) {
     <div>
       <div className="rounded-3xl p-6 sm:p-9 mb-8 text-white" style={{ background: `linear-gradient(135deg, ${COVER}, ${COVER_2})` }}>
         <p className="text-sm mb-1" style={{ color: "#A9C2B7" }}>{greeting}, {user.name.split(" ")[0]}</p>
-        <h1 className="font-display text-3xl sm:text-4xl font-semibold mb-5">Tigom ta, brad 🤙</h1>
+        <h1 className="font-display text-3xl sm:text-4xl font-semibold mb-5">Tigom ta, brad</h1>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
           <div>
             <p className="text-xs mb-1" style={{ color: "#9FB6AC" }}>Saved across all trips</p>
@@ -778,7 +798,10 @@ function MembersView({ trip, stats, updateTrip, openModal, isAdmin }) {
         {isAdmin && <button onClick={() => openModal("addMember")} className="text-white px-3.5 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5" style={{ background: FOREST }}><Plus size={16} /> Add member</button>}
       </div>
       <div className="space-y-3">
-        {stats.perMember.map((m) => (
+        {stats.perMember.map((m) => {
+          const ledger = stats.memberLedger.find((l) => l.id === m.id);
+          const thisWeek = ledger?.weeks[ledger.weeks.length - 1];
+          return (
           <Card key={m.id} className="p-4">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold text-white shrink-0" style={{ background: accentFor(m.id) }}>
@@ -794,6 +817,14 @@ function MembersView({ trip, stats, updateTrip, openModal, isAdmin }) {
               </div>
             </div>
             {m.pct !== null && (<><ProgressBar pct={m.pct} color="#3E6D8E" /><p className="text-xs mt-1" style={{ color: MUTED }}>{m.pct.toFixed(0)}% contributed · {peso(Math.max(0, m.goal - m.total))} remaining</p></>)}
+            {thisWeek && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                {thisWeek.status === "paid" && <Pill tone="good">Caught up this week</Pill>}
+                {thisWeek.status === "partial" && <Pill tone="warn">{peso(thisWeek.paid)} of {peso(thisWeek.owed)} this week</Pill>}
+                {thisWeek.status === "unpaid" && <Pill tone="bad">Not yet paid this week</Pill>}
+                {ledger.advance > 0 && <Pill tone="good">+{peso(ledger.advance)} banked ahead</Pill>}
+              </div>
+            )}
             {isAdmin && (
               <div className="flex gap-3 mt-2">
                 <button onClick={() => openModal("editMember", m)} className="text-xs flex items-center gap-1 hover:underline" style={{ color: MUTED }}><Pencil size={12} /> Edit</button>
@@ -801,7 +832,8 @@ function MembersView({ trip, stats, updateTrip, openModal, isAdmin }) {
               </div>
             )}
           </Card>
-        ))}
+          );
+        })}
         {stats.perMember.length === 0 && <EmptyState text="No members yet." />}
       </div>
     </div>
@@ -942,19 +974,61 @@ function ReportsView({ trip, stats }) {
       )}
       <Card className="p-5 mb-5">
         <h3 className="font-medium mb-3">Weekly overview</h3>
-        <p className="text-xs mb-3" style={{ color: MUTED }}>Week 1 starts the week this trip fund was created.</p>
-        {stats.weekNums.slice(0, 6).map((w) => (
-          <div key={w} className="mb-3 last:mb-0">
-            <p className="text-sm font-medium mb-1.5">Week {w}</p>
-            <div className="space-y-1">
-              {trip.members.map((m) => {
-                const paid = stats.weeks[w][m.id];
-                return <div key={m.id} className="flex justify-between text-xs"><span style={{ color: "#5B5546" }}>{m.name}</span>{paid ? <span style={{ color: "#3A5C40" }}>{peso(paid)} · Paid</span> : <span style={{ color: DANGER }}>Not yet paid</span>}</div>;
-              })}
-            </div>
-          </div>
-        ))}
-        {stats.weekNums.length === 0 && <p className="text-sm" style={{ color: MUTED }}>No weekly data yet.</p>}
+        {stats.weeklyAmount > 0 ? (
+          <>
+            <p className="text-xs mb-3" style={{ color: MUTED }}>
+              Week 1 starts when this trip fund was created · {peso(stats.weeklyAmount)} expected per member each week.
+              A late or extra payment covers the oldest unpaid week first; anything left over is banked as credit toward next week.
+            </p>
+            {Array.from({ length: stats.currentWeek }, (_, i) => stats.currentWeek - i).map((w) => (
+              <div key={w} className="mb-3 last:mb-0">
+                <p className="text-sm font-medium mb-1.5">Week {w}{w === stats.currentWeek ? " (current)" : ""}</p>
+                <div className="space-y-1">
+                  {stats.memberLedger.map((m) => {
+                    const wk = m.weeks[w - 1];
+                    return (
+                      <div key={m.id} className="flex justify-between text-xs">
+                        <span style={{ color: "#5B5546" }}>{m.name}</span>
+                        {wk.status === "paid" && <span style={{ color: "#3A5C40" }}>Paid</span>}
+                        {wk.status === "partial" && <span style={{ color: WARN }}>{peso(wk.paid)} of {peso(wk.owed)}</span>}
+                        {wk.status === "unpaid" && <span style={{ color: DANGER }}>Not yet paid</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {stats.memberLedger.some((m) => m.advance > 0) && (
+              <div className="mt-4 pt-3 border-t" style={{ borderColor: BORDER }}>
+                <p className="text-xs font-medium mb-1.5" style={{ color: MUTED }}>Banked credit for future weeks</p>
+                {stats.memberLedger.filter((m) => m.advance > 0).map((m) => (
+                  <div key={m.id} className="flex justify-between text-xs mb-1">
+                    <span style={{ color: "#5B5546" }}>{m.name}</span>
+                    <span style={{ color: "#3A5C40" }}>+{peso(m.advance)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-xs mb-3" style={{ color: MUTED }}>
+              Week 1 starts the week this trip fund was created. Set a weekly amount in Edit trip to track who's caught up automatically.
+            </p>
+            {stats.weekNums.slice(0, 6).map((w) => (
+              <div key={w} className="mb-3 last:mb-0">
+                <p className="text-sm font-medium mb-1.5">Week {w}</p>
+                <div className="space-y-1">
+                  {trip.members.map((m) => {
+                    const paid = stats.weeks[w][m.id];
+                    return <div key={m.id} className="flex justify-between text-xs"><span style={{ color: "#5B5546" }}>{m.name}</span>{paid ? <span style={{ color: "#3A5C40" }}>{peso(paid)} · Paid</span> : <span style={{ color: DANGER }}>Not yet paid</span>}</div>;
+                  })}
+                </div>
+              </div>
+            ))}
+            {stats.weekNums.length === 0 && <p className="text-sm" style={{ color: MUTED }}>No weekly data yet.</p>}
+          </>
+        )}
       </Card>
     </div>
   );
